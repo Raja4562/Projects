@@ -1,0 +1,352 @@
+---
+title: "HW5"
+author: "Raja Prabakaran"
+date: "2024-06-08"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(reshape2)
+library(plotly)
+library(caret)
+library(factoextra)
+library(rpart)
+library(pROC)
+```
+
+# a. Data gathering and integration
+
+```{r}
+bundesliga <- read.csv("Bundesliga_player.csv")
+head(bundesliga)
+
+```
+
+# b. Data Exploration
+
+##Summary Statistics
+
+```{r}
+
+summary(bundesliga)
+
+```
+
+##Distributions of Key Variables
+
+###Combined Histogram for Numerical Variables
+
+```{r}
+numerical_vars <- c("age", "height", "price", "max_price")
+
+df_long <- melt(bundesliga, measure.vars = numerical_vars)
+
+combined_histogram <- ggplot(df_long, aes(x = value, fill = variable)) +
+  geom_histogram(binwidth = 5, color = "black", position = "identity", alpha = 0.7) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(x = "Value", y = "Frequency", fill = "Variable") +
+  ggtitle("Combined Histogram of Numerical Variables") +
+  theme_minimal()
+
+print(combined_histogram)
+
+```
+
+##Box Plots for Numerical Variables by Position
+
+```{r}
+bundesliga$position <- as.factor(bundesliga$position)
+
+plots <- lapply(numerical_vars, function(var) {
+  plot_ly(data = bundesliga, x = bundesliga[[var]], y = bundesliga$position, type = "box",
+          color = bundesliga$position, colors = "Set3",
+          marker = list(line = list(color = 'rgb(0,0,0)', width = 1)),
+          boxmean = TRUE) %>%
+    layout(title = paste(var, "vs Position"),
+           xaxis = list(title = var),
+           yaxis = list(title = "Position"),
+           template = "plotly_white")
+})
+
+
+plots
+
+```
+
+# c. Data Cleaning
+
+
+
+##Fixing Typos and Cleaning Strings
+
+```{r}
+bundesliga$nationality <- gsub("Â Â ", "", bundesliga$nationality)
+bundesliga$place_of_birth <- gsub("Â Â ", "", bundesliga$place_of_birth)
+
+```
+
+##Changing Date Columns to Date Format
+
+```{r}
+
+bundesliga$contract_expires <- as.Date(bundesliga$contract_expires, format="%d/%m/%Y")
+bundesliga$joined_club <- as.Date(bundesliga$joined_club, format="%d/%m/%Y")
+
+```
+
+##Removing Unnecessary Columns
+
+```{r}
+bundesliga <- bundesliga %>% select(-full_name, -player_agent,-place_of_birth, -contract_expires, -joined_club)
+```
+
+
+##Removing Missing Values
+
+```{r}
+
+bundesliga <- na.omit(bundesliga)
+
+```
+##Checking for Missing Values and Summary Statistics After Cleaning
+
+###Cleaning
+
+```{r}
+summary(bundesliga)
+
+```
+
+###Visualizing Clean Data
+
+```{r}
+ggplot(bundesliga, aes(x = age)) +
+  geom_histogram(binwidth = 5, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Age Distribution of Players (Cleaned Data)", x = "Age", y = "Count")
+
+```
+
+# d. Data Preprocessing
+
+##Normalization
+
+```{r}
+bundesliga[numerical_vars] <- scale(bundesliga[numerical_vars])
+
+```
+
+##Creating Dummy Variables for Categorical Columns
+
+```{r}
+categorical_cols <- c('position', 'nationality', 'club')
+
+bundesliga <- bundesliga %>%
+  mutate(across(all_of(categorical_cols), as.factor)) %>%
+  model.matrix(~.-1, data=.) %>%
+  as.data.frame()
+
+```
+
+##Binning 'Age' into Categories: 'young', 'mid', 'old'
+
+```{r}
+bundesliga$age_group <- cut(bundesliga$age, breaks = 3, labels = c("young", "mid", "old"))
+
+```
+
+
+
+
+##Visualizing Preprocessed Data
+
+```{r}
+ggplot(bundesliga, aes(x = age_group)) +
+  geom_bar(fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Age Groups (Preprocessed Data)", x = "Age Group", y = "Count")
+
+
+```
+
+
+
+# e. Clustering
+
+##PCA and Clustering
+
+```{r}
+
+
+numeric_cols <- sapply(bundesliga, is.numeric)
+bundesliga_numeric <- bundesliga[, numeric_cols]
+
+bundesliga.pca <- prcomp(bundesliga_numeric, center = TRUE, scale. = TRUE)
+summary(bundesliga.pca)
+screeplot(bundesliga.pca, type = "l") + title(xlab = "PCs")
+
+bundesliga_pca_df <- as.data.frame(bundesliga.pca$x)
+
+
+```
+
+## Hierarchical Clustering
+
+```{r}
+dist_mat <- dist(bundesliga_pca_df, method = 'manhattan')
+hfit <- hclust(dist_mat, method = 'average')
+plot(hfit)
+
+fviz_nbclust(bundesliga_pca_df, FUN = hcut, method = "wss")
+fviz_nbclust(bundesliga_pca_df, FUN = hcut, method = "silhouette")
+
+h3 <- cutree(hfit, k = 3) 
+fviz_cluster(list(data = bundesliga_pca_df, cluster = h3))
+
+bundesliga_pca_df$Clusters <- as.factor(h3)
+
+ggplot(data = bundesliga_pca_df, aes(x = PC1, y = PC2, col = Clusters)) +
+  geom_point()
+
+```
+
+## K-Means Clustering
+
+```{r}
+preproc <- preProcess(bundesliga_pca_df, method = c("center", "scale"))
+bundesliga_normalized <- predict(preproc, bundesliga_pca_df)
+
+numeric_cols <- sapply(bundesliga_normalized, is.numeric)
+bundesliga_normalized_numeric <- bundesliga_normalized[, numeric_cols]
+
+fviz_nbclust(bundesliga_normalized_numeric, kmeans, method = "wss")
+fviz_nbclust(bundesliga_normalized_numeric, kmeans, method = "silhouette")
+
+fit_kmeans <- kmeans(bundesliga_normalized_numeric, centers = 2, nstart = 25) 
+
+fviz_cluster(fit_kmeans, data = bundesliga_normalized_numeric)
+
+
+```
+
+
+
+# f. Classification
+
+##Creating the Target Variable and Splitting the Data
+
+```{r}
+set.seed(123)
+
+bundesliga$age_group <- as.factor(bundesliga$age_group)
+
+index <- createDataPartition(y = bundesliga$age_group, p = 0.7, list = FALSE)
+train_data <- bundesliga[index,]
+test_data <- bundesliga[-index,]
+
+predictors <- sapply(train_data, is.numeric) | sapply(train_data, is.factor)
+train_data <- train_data[, predictors]
+test_data <- test_data[, predictors]
+
+names(train_data) <- make.names(names(train_data))
+names(test_data) <- make.names(names(test_data))
+
+```
+
+##Training the k-NN Model
+
+```{r}
+train_control <- trainControl(method = "cv", number = 10)
+
+knn_model <- train(age_group ~ ., data = train_data, method = "knn", trControl = train_control, tuneLength = 20)
+
+print(knn_model)
+
+
+```
+
+
+
+```{r}
+tree_model <- train(age_group ~ ., data = train_data, method = "rpart", trControl = train_control)
+
+print(tree_model)
+
+
+```
+
+
+
+# g. Evaluation
+
+#Confusion Matrix
+
+```{r}
+train_data$age_binary <- ifelse(train_data$age_group == "young", "young", "not_young")
+test_data$age_binary <- ifelse(test_data$age_group == "young", "young", "not_young")
+
+train_data$age_binary <- factor(train_data$age_binary, levels = c("young", "not_young"))
+test_data$age_binary <- factor(test_data$age_binary, levels = c("young", "not_young"))
+
+tree_model_binary <- train(age_binary ~ ., data = train_data, method = "rpart", trControl = train_control)
+
+tree_predictions_binary <- predict(tree_model_binary, newdata = test_data)
+
+tree_predictions_binary <- factor(tree_predictions_binary, levels = c("young", "not_young"))
+
+tree_conf_matrix_binary <- confusionMatrix(tree_predictions_binary, test_data$age_binary)
+print(tree_conf_matrix_binary)
+
+```
+##Precision and Recal
+
+
+```{r}
+
+cm_values <- as.numeric(tree_conf_matrix_binary$table)
+true_negative <- cm_values[1]
+false_positive <- cm_values[2]
+false_negative <- cm_values[3]
+true_positive <- cm_values[4]
+
+precision <- true_positive / (true_positive + false_positive)
+recall <- true_positive / (true_positive + false_negative)
+
+precision
+recall
+
+```
+
+##ROC Curve
+
+```{r}
+tree_pred_prob_binary <- predict(tree_model_binary, newdata = test_data, type = "prob")
+head(tree_pred_prob_binary)
+
+roc_tree_binary <- roc(response = test_data$age_binary, predictor = tree_pred_prob_binary[, "young"])
+
+plot(roc_tree_binary, main = "ROC Curve for Decision Tree (Binary)")
+legend("bottomright", legend = c("AUC: 1.0000"), lwd = 2)
+
+
+```
+
+
+
+## h. Report
+
+- Refer pdf
+
+## i. Reflection
+
+- Refer pdf
+
+
+
