@@ -1,0 +1,363 @@
+---
+title: "Comprehensive Analysis of FIFA Player Ratings"
+author: "Raja"
+date: "2024-11-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+## Dataset Description and Loading
+
+```{r}
+
+library(readxl)
+library(ggplot2)
+library(corrplot)
+library(dplyr)
+library(caret)
+
+data <- read_excel("Dataset.xlsx")
+
+str(data)
+
+```
+
+
+
+## Preprocessing Steps
+
+```{r}
+
+selected_columns <- c('overall', 'wage_eur', 'age', 'value_eur', 'pace', 
+                      'shooting', 'passing', 'dribbling', 'defending', 
+                      'physic', 'skill_moves', 'weak_foot')
+data <- data[, selected_columns]
+
+data <- na.omit(data)
+
+missing_values <- sum(is.na(data))
+cat("Number of missing values after preprocessing:", missing_values, "\n")
+
+summary(data)
+
+```
+
+
+
+## Exploratory Data Analysis (EDA)
+
+
+```{r}
+library(ggplot2)
+
+ggplot(data, aes(x = overall)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", color = "black", alpha = 0.7) +
+  geom_density(color = "red", size = 1) +
+  labs(title = "Distribution of Overall Ratings", x = "Overall Rating", y = "Density") +
+  theme_minimal()
+```
+
+
+```{r}
+library(corrplot)
+
+correlation_matrix <- cor(data, use = "complete.obs")
+
+corrplot(correlation_matrix, method = "color", type = "upper", tl.col = "black", tl.srt = 45, 
+         title = "Correlation Matrix of Player Attributes", mar = c(0, 0, 1, 0))
+```
+
+
+## VIF
+
+
+```{r}
+library(car)
+
+vif_model <- lm(overall ~ wage_eur + age + value_eur + pace + shooting +
+                  passing + dribbling + defending + physic + skill_moves +
+                  weak_foot, data = data)
+
+vif_values <- vif(vif_model)
+
+vif_values
+```
+
+
+
+## Implementing Multiple Linear Regression
+
+
+```{r}
+linear_model <- lm(overall ~ ., data = data)
+linear_model_summary <- summary(linear_model)
+
+print(linear_model_summary)
+
+predictions_linear <- predict(linear_model, newdata = data)
+
+mse_linear <- mean((data$overall - predictions_linear)^2)
+rmse_linear <- sqrt(mse_linear)
+
+cat("MSE (Linear Regression):", mse_linear, "\n")
+cat("RMSE (Linear Regression):", rmse_linear, "\n")
+
+```
+
+
+## Implementing Polynomial Regression
+
+```{r}
+
+data <- data %>% mutate(
+  pace2 = pace^2,
+  shooting2 = shooting^2,
+  passing2 = passing^2,
+  dribbling2 = dribbling^2,
+  defending2 = defending^2,
+  physic2 = physic^2
+)
+
+poly_model <- lm(overall ~ pace + pace2 + shooting + shooting2 + passing + passing2 +
+                   dribbling + dribbling2 + defending + defending2 + physic + physic2 +
+                   wage_eur + age + value_eur + skill_moves + weak_foot, data = data)
+
+poly_model_summary <- summary(poly_model)
+
+predictions_poly <- predict(poly_model, newdata = data)
+mse_poly <- mean((data$overall - predictions_poly)^2)
+rmse_poly <- sqrt(mse_poly)
+
+cat("Polynomial Regression Model Summary:\n")
+print(poly_model_summary)
+
+cat("\nMSE (Polynomial Regression):", mse_poly, "\n")
+cat("RMSE (Polynomial Regression):", rmse_poly, "\n")
+
+```
+
+
+
+## Ridge 
+
+```{r}
+
+library(glmnet)
+
+x <- model.matrix(overall ~ ., data)[, -1]
+y <- data$overall
+
+ridge_model <- cv.glmnet(x, y, alpha = 0, nfolds = 10)
+ridge_best_lambda <- ridge_model$lambda.min
+
+ridge_predictions <- predict(ridge_model, s = ridge_best_lambda, newx = x)
+ridge_mse <- mean((y - ridge_predictions)^2)
+ridge_rmse <- sqrt(ridge_mse)
+
+cat("Ridge Regression:\n")
+cat("Best Lambda:", ridge_best_lambda, "\n")
+cat("MSE:", ridge_mse, "\n")
+cat("RMSE:", ridge_rmse, "\n")
+
+```
+
+
+## Lasso Regression
+
+```{r}
+lasso_model <- cv.glmnet(x, y, alpha = 1, nfolds = 10)
+lasso_best_lambda <- lasso_model$lambda.min
+
+lasso_predictions <- predict(lasso_model, s = lasso_best_lambda, newx = x)
+lasso_mse <- mean((y - lasso_predictions)^2)
+lasso_rmse <- sqrt(lasso_mse)
+
+cat("Lasso Regression:\n")
+cat("Best Lambda:", lasso_best_lambda, "\n")
+cat("MSE:", lasso_mse, "\n")
+cat("RMSE:", lasso_rmse, "\n")
+
+
+```
+```{r}
+lasso_coefficients <- predict(lasso_model, s = lasso_best_lambda, type = "coefficients")
+print(lasso_coefficients)
+
+```
+
+
+
+## Cross-Validation for Polynomial Regression
+
+```{r}
+library(caret)
+
+set.seed(42) 
+
+folds <- createFolds(data$overall, k = 10, list = TRUE, returnTrain = TRUE)
+
+cv_mse_poly <- c()
+cv_rmse_poly <- c()
+
+for (i in 1:10) {
+  train_indices <- folds[[i]]
+  train_data <- data[train_indices, ]
+  test_data <- data[-train_indices, ]
+
+  poly_model_cv <- lm(overall ~ pace + I(pace^2) + shooting + I(shooting^2) +
+                      passing + I(passing^2) + dribbling + I(dribbling^2) +
+                      defending + I(defending^2) + physic + I(physic^2) +
+                      wage_eur + age + value_eur + skill_moves + weak_foot, 
+                      data = train_data)
+
+  predictions_cv <- predict(poly_model_cv, newdata = test_data)
+
+  mse <- mean((test_data$overall - predictions_cv)^2)
+  rmse <- sqrt(mse)
+
+  cv_mse_poly <- c(cv_mse_poly, mse)
+  cv_rmse_poly <- c(cv_rmse_poly, rmse)
+}
+
+mean_mse_poly <- mean(cv_mse_poly)
+mean_rmse_poly <- mean(cv_rmse_poly)
+
+cat("Cross-Validation Results for Polynomial Regression:\n")
+cat("Mean MSE:", mean_mse_poly, "\n")
+cat("Mean RMSE:", mean_rmse_poly, "\n")
+
+```
+
+
+
+## Residual Analysis
+
+
+```{r}
+
+
+par(mfrow = c(2, 2))  
+plot(poly_model)
+
+```
+```{r}
+hist(residuals(poly_model), breaks = 30, col = "skyblue",
+     main = "Histogram of Residuals", xlab = "Residuals")
+
+```
+
+```{r}
+
+qqnorm(residuals(poly_model), main = "Q-Q Plot of Residuals")
+qqline(residuals(poly_model), col = "red")
+
+```
+
+
+
+```{r}
+
+cooks_distances <- cooks.distance(poly_model)
+
+threshold <- 4 / length(cooks_distances)
+high_leverage_points <- which(cooks_distances > threshold)
+
+cat("Number of high-leverage points:", length(high_leverage_points), "\n")
+cat("Indices of high-leverage points:", high_leverage_points, "\n")
+
+plot(cooks_distances, type = "h", main = "Cook's Distance for Influential Points",
+     xlab = "Observation", ylab = "Cook's Distance")
+abline(h = threshold, col = "red", lty = 2)
+
+data_cleaned <- data[-high_leverage_points, ]
+
+cat("Number of observations after removing high-leverage points:", nrow(data_cleaned), "\n")
+
+```
+
+```{r}
+poly_model_cleaned <- lm(overall ~ pace + I(pace^2) + shooting + I(shooting^2) + 
+                         passing + I(passing^2) + dribbling + I(dribbling^2) +
+                         defending + I(defending^2) + physic + I(physic^2) +
+                         wage_eur + age + value_eur + skill_moves + weak_foot, 
+                         data = data_cleaned)
+
+summary(poly_model_cleaned)
+
+predictions_cleaned <- predict(poly_model_cleaned, newdata = data_cleaned)
+mse_cleaned <- mean((data_cleaned$overall - predictions_cleaned)^2)
+rmse_cleaned <- sqrt(mse_cleaned)
+
+cat("Polynomial Regression (Cleaned Data):\n")
+cat("MSE:", mse_cleaned, "\n")
+cat("RMSE:", rmse_cleaned, "\n")
+
+library(caret)
+set.seed(42)
+folds <- createFolds(data_cleaned$overall, k = 10, list = TRUE)
+
+cv_mse_cleaned <- c()
+cv_rmse_cleaned <- c()
+
+for (i in 1:10) {
+  train_index <- folds[[i]]
+  train_data <- data_cleaned[train_index, ]
+  test_data <- data_cleaned[-train_index, ]
+  
+  poly_model_cv_cleaned <- lm(overall ~ pace + I(pace^2) + shooting + I(shooting^2) +
+                              passing + I(passing^2) + dribbling + I(dribbling^2) +
+                              defending + I(defending^2) + physic + I(physic^2) +
+                              wage_eur + age + value_eur + skill_moves + weak_foot,
+                              data = train_data)
+  
+  predictions_cv_cleaned <- predict(poly_model_cv_cleaned, newdata = test_data)
+  mse_cv_cleaned <- mean((test_data$overall - predictions_cv_cleaned)^2)
+  rmse_cv_cleaned <- sqrt(mse_cv_cleaned)
+  
+  cv_mse_cleaned <- c(cv_mse_cleaned, mse_cv_cleaned)
+  cv_rmse_cleaned <- c(cv_rmse_cleaned, rmse_cv_cleaned)
+}
+
+cat("Cross-Validation Results (Cleaned Data):\n")
+cat("Mean MSE:", mean(cv_mse_cleaned), "\n")
+cat("Mean RMSE:", mean(cv_rmse_cleaned), "\n")
+
+```
+
+
+## Results
+
+
+```{r}
+library(knitr)
+
+results_table <- data.frame(
+  Method = c(
+    "Linear Regression",
+    "Polynomial Regression",
+    "Ridge Regression",
+    "Lasso Regression",
+    "Polynomial (Cleaned)"
+  ),
+  `R^2` = c(0.8016, 0.8883, 0.8041, 0.8824, 0.9068),
+  `Adjusted R^2` = c(0.8016, 0.8883, 0.8229, 0.8882, 0.9068),
+  `MSE` = c(8.9158, 5.0176, 7.9558, 5.0230, 3.5884),
+  `RMSE` = c(2.9859, 2.2401, 2.8206, 2.2412, 1.8943),
+  `Cross-Validated RMSE` = c("-", 2.2437, "-", "-", 1.9064)
+)
+
+kable(results_table, caption = "Comparison of Model Performance Metrics", digits = 4)
+
+
+```
+
+
+
+
+

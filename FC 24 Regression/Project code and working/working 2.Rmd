@@ -1,0 +1,310 @@
+---
+title: "Project 2"
+author: "Raja Prabakaran"
+date: "2024-11-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+library(car)
+library(glmnet)
+library(ggplot2)
+library(corrplot)
+library(readxl)
+```
+
+
+# Project Introduction and Objective
+
+The goal of this project is to predict a soccer player’s overall rating (a measure of skill) based on specific attributes such as pace, shooting, passing, dribbling, etc. This is useful because identifying what attributes contribute most to a player’s rating can help teams make data-driven decisions in areas like scouting, player development, and team strategy.
+
+In summary:
+
+- Goal: Build a model to predict a soccer player’s overall rating.
+- Objective: Understand which attributes are most influential in determining a player’s skill level.
+- Significance: Helps teams make informed decisions based on data.
+
+### Data Loading and Initial Exploration
+
+```{r}
+
+dataset <- read_excel("Dataset.xlsx")
+glimpse(dataset)
+summary(dataset)
+```
+
+
+
+
+### Data Description
+
+The dataset includes a wide range of variables representing the characteristics of soccer players, such as physical, technical, mental, and goalkeeping attributes. There are 18,350 observations and 82 variables. Key variables include:
+  
+- **overall**: Player's overall rating (target variable).
+- **pace, shooting, passing, dribbling, defending, physic**: Physical and technical attributes directly affecting performance.
+- **weak_foot, skill_moves**: Skills that represent a player's versatility and technical ability.
+
+### Missing Values and Irrelevant Variables
+
+Some columns contain a high number of missing values (e.g., goalkeeping attributes), which may not be relevant to all players. Columns with mostly `NA` values (like `goalkeeping_speed`) will be dropped, along with non-numeric or identifier columns, such as `player_id`, `player_url`, `short_name`, and `club_name`.
+
+
+
+# Data Preprocessing
+
+```{r}
+
+# Remove irrelevant or mostly missing columns
+dataset <- dataset %>%
+  dplyr::select(overall, pace, shooting, passing, dribbling, defending, physic, 
+                weak_foot, skill_moves)
+
+# Check for remaining missing values
+missing_counts <- colSums(is.na(dataset))
+print(missing_counts)
+
+# Drop rows with any missing values (if any are left after selection)
+dataset <- dataset %>% drop_na()
+
+```
+
+
+# Exploratory Data Analysis (EDA)
+
+```{r}
+## Exploratory Data Analysis
+
+# Summary statistics for the cleaned dataset
+summary(dataset)
+
+# Correlation matrix
+cor_matrix <- cor(dataset, use = "complete.obs")
+print(cor_matrix)
+
+# Visualize the correlation matrix
+library(corrplot)
+corrplot::corrplot(cor_matrix, method = "circle")
+
+# Scatter plots to explore relationships between `overall` and other features
+pairs(dataset)
+
+```
+
+From the correlation matrix and scatter plot matrix, we can understand the relationships between the variables in terms of their association with the **Overall** rating as well as with each other:
+
+1. **High Correlation with Overall**:
+   - **Passing** (correlation: 0.71), **Dribbling** (0.66), and **Physic** (0.53) exhibit relatively high correlations with the **Overall** rating. This suggests that these attributes are strongly associated with a higher overall rating and may significantly impact a player’s perceived skill or ability.
+
+2. **Moderate to Low Correlation**:
+   - **Shooting** (0.48) and **Skill Moves** (0.40) have moderate correlations with the **Overall** rating, indicating that while they contribute to the player’s rating, their impact might not be as strong as that of Passing or Dribbling.
+   - **Defending** and **Pace** have lower correlations with the **Overall** rating, suggesting these attributes may not be as critical for predicting the overall rating.
+
+3. **Weak or No Relationship**:
+   - **Weak Foot** and **Physic** exhibit relatively low correlation values with the **Overall** rating, implying they don’t strongly influence the player’s overall rating based on this dataset.
+
+4. **Potential Multicollinearity**:
+   - High correlations between **Passing** and **Dribbling** (0.84), as well as **Shooting** and **Dribbling** (0.77), suggest multicollinearity, where certain predictors are highly correlated with each other. Multicollinearity can affect model stability and interpretation, especially in linear regression models, as it may lead to inflated variance in the coefficient estimates.
+   - Regularized regression techniques like Ridge and Lasso, which penalize complex models, can help mitigate this issue by reducing the impact of correlated predictors.
+
+5. **Relationships with Other Attributes**:
+   - **Skill Moves** shows a positive correlation with **Dribbling** and **Shooting**, which aligns with the expectation that players with high skill moves likely excel in these technical areas.
+   - **Pace** has a weak negative correlation with **Defending** and **Physic**, suggesting that players who are faster may not necessarily excel in defensive skills or physical strength.
+
+In summary:
+- **Passing**, **Dribbling**, and **Physic** appear to be the most significant predictors of the **Overall** rating, while attributes like **Weak Foot** have minimal impact.
+- High multicollinearity between **Dribbling**, **Passing**, and **Shooting** indicates that these predictors carry overlapping information, making regularization methods like Ridge or Lasso helpful for handling redundancy in our regression models.
+
+
+
+
+
+
+
+
+# Model Building
+
+
+### Multiple Linear Regression
+
+```{r}
+# Multiple Linear Regression Model
+model_lm <- lm(overall ~ pace + shooting + passing + dribbling + defending + physic + weak_foot + skill_moves, data = dataset)
+
+# Display model summary
+summary(model_lm)
+```
+- Predict a player’s overall rating using features like shooting, passing, and dribbling.
+- Most features, like shooting, passing, and physic, are statistically significant and have a real impact on predicting the overall rating.
+- weak_foot isn't very useful here (high p-value), suggesting it doesn’t add much to our prediction.
+- Fit: The model explains about 75% of the variance in the overall rating (Adjusted R-squared = 0.7534).
+
+
+
+
+### Multicollinearity Check (VIF)
+
+```{r}
+vif_values <- car::vif(model_lm)
+print(vif_values)
+```
+
+- Check if predictors are too closely related, which can mess with our estimates.
+- passing(6.7) and dribbling(7.2) have higher VIF scores, indicating some correlation with other predictors. This means they might overlap in the information they provide, which can lead to instability in the model.
+
+
+
+### Regularized Regression (Ridge and Lasso)
+
+#### Lasso Regression
+```{r}
+# Prepare data for glmnet
+x <- model.matrix(overall ~ pace + shooting + passing + dribbling + defending + 
+                  physic + weak_foot + skill_moves, data = dataset)
+y <- dataset$overall
+
+# Lasso Regression
+lasso_model <- glmnet(x, y, alpha = 1)  # Fit the Lasso model with L1 regularization
+cv_lasso <- cv.glmnet(x, y, alpha = 1)  # Perform cross-validation to find optimal lambda for Lasso
+plot(cv_lasso)  # Plot cross-validation results
+
+```
+
+- Lasso Regression Purpose: Lasso (L1 regularization) helps reduce unnecessary features by shrinking some coefficients to zero, keeping only the most important predictors.
+
+- Cross-Validation Plot: This plot shows how different values of lambda affect model error. The lowest point in the plot is the best lambda, which balances model accuracy and simplicity.
+
+
+
+
+```{r}
+# Optimal lambda for Lasso
+lasso_best_lambda <- cv_lasso$lambda.min
+cat("Optimal lambda for Lasso:", lasso_best_lambda, "\n")
+
+```
+
+-  The best lambda value minimizes error, helping us select the right amount of regularization.
+
+```{r}
+# Coefficients at best lambda
+lasso_coef <- predict(lasso_model, s = lasso_best_lambda, type = "coefficients")
+print("Lasso Regression Coefficients:")
+print(lasso_coef)
+
+```
+- Lasso Regression Coefficients: These are the final coefficients selected by the Lasso model at the optimal lambda value. The coefficients represent the contribution of each feature to predicting the overall rating. Notice that some coefficients (e.g., weak_foot) have been shrunk to zero by Lasso, indicating that they don’t significantly impact the prediction. This sparsity is a key feature of Lasso, as it helps simplify the model by excluding less important predictors.
+
+
+
+
+### Model Building and Feature Selection
+
+In this section, we aim to create and select the best models while using variable selection techniques to enhance model performance and interpretability.
+
+#### Creating Models
+
+We built three types of regression models:
+
+- **Multiple Linear Regression**: This served as our baseline model to examine how well the selected features can explain the player's overall rating without any regularization.
+- **Lasso Regression**: Lasso (L1 regularization) was chosen for its ability to perform feature selection by shrinking less significant coefficients to zero.
+- **Ridge Regression**: Ridge (L2 regularization) was included to address potential multicollinearity by penalizing large coefficients.
+
+#### Selecting Models
+
+Each model provides unique insights and benefits:
+
+- **Multiple Linear Regression** offers a straightforward interpretation of the relationship between features and overall rating.
+- **Lasso Regression** helps in simplifying the model by removing less impactful variables, thus focusing on the most influential predictors.
+- **Ridge Regression** stabilizes the model when features are correlated, helping prevent overfitting by penalizing large weights.
+
+#### Variable Selection with Lasso Regression
+
+Lasso Regression naturally performs variable selection:
+
+- By applying a penalty, it reduces some coefficients to zero at the optimal lambda value.
+- This process retains only the most impactful variables, enhancing model simplicity and interpretability.
+
+These steps help us focus on the most significant features for predicting player ratings, improving model accuracy and making the model more manageable.
+
+
+
+
+
+
+# Model Validation and Residual Analysis
+
+
+### Cross-Validation for Model Performance
+
+
+```{r}
+# Load the caret package for cross-validation
+library(caret)
+
+# Set up cross-validation with 5 folds
+train_control <- trainControl(method = "cv", number = 5)
+
+# Train the linear model using cross-validation
+cv_model <- train(overall ~ pace + shooting + passing + dribbling + defending + 
+                  physic + weak_foot + skill_moves,
+                  data = dataset,
+                  method = "lm",
+                  trControl = train_control)
+
+# Output cross-validation results
+print(cv_model)
+
+# Calculate RMSE
+cv_rmse <- sqrt(mean(cv_model$resample$RMSE^2))
+cat("Cross-validated RMSE:", cv_rmse, "\n")
+
+```
+
+
+### Residual Analysis
+
+```{r}
+# Plot residuals for linear regression model
+par(mfrow = c(2, 2))
+plot(model_lm)
+par(mfrow = c(1, 1))  # Reset layout
+
+```
+
+
+### Model Performance Summary
+
+
+```{r}
+# Summarize model performance metrics
+cat("Cross-Validated RMSE:", cv_rmse, "\n")
+cat("Adjusted R-squared for Linear Model:", summary(model_lm)$adj.r.squared, "\n")
+
+```
+
+
+# Final Code Blocks for Conclusion
+```{r}
+# Display final summary metrics
+cat("Adjusted R-squared for Linear Model:", summary(model_lm)$adj.r.squared, "\n")
+cat("Cross-Validated RMSE:", cv_rmse, "\n")
+
+# Display Lasso and Ridge coefficients
+cat("Lasso Regression Coefficients at Best Lambda:", "\n")
+print(lasso_coef)
+
+cat("Ridge Regression Coefficients at Best Lambda:", "\n")
+print(ridge_coef)
+
+```
+
+
+
+
+

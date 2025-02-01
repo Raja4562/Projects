@@ -1,0 +1,213 @@
+---
+title: "project model evaluation"
+author: "Raja Prabakaran"
+date: "2024-11-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(caret)
+library(car)
+library(glmnet)
+library(ggplot2)
+library(corrplot)
+library(readxl)
+library(car)
+
+```
+
+
+# Data Loading
+
+
+```{r}
+dataset <- read_excel("Dataset.xlsx")
+summary(dataset)
+```
+
+
+
+
+# Data Preprocessing
+
+
+
+```{r}
+# Select predictors including age, player value, and wages along with other key attributes
+dataset <- dataset %>%
+  dplyr::select(overall, pace, shooting, passing, dribbling, defending, physic, 
+                weak_foot, skill_moves, age, value_eur, wage_eur)
+
+# Check for missing values
+missing_counts <- colSums(is.na(dataset))
+print(missing_counts)
+
+# Remove rows with any missing values
+dataset <- dataset %>% drop_na()
+
+```
+
+
+# Exploratory Data Analysis (EDA)
+
+```{r}
+# Correlation matrix
+cor_matrix <- cor(dataset, use = "complete.obs")
+corrplot::corrplot(cor_matrix, method = "circle")
+
+```
+
+
+# Multiple Linear Regression
+
+
+```{r}
+# Multiple Linear Regression Model
+model_lm <- lm(overall ~ pace + shooting + passing + dribbling + defending + physic + 
+               weak_foot + skill_moves + age + value_eur + wage_eur, data = dataset)
+
+# Summary and metrics
+summary(model_lm)
+
+
+```
+
+```{r}
+# Calculate predictions
+predictions <- predict(model_lm, dataset)
+
+# Calculate MSE
+mse <- mean((dataset$overall - predictions)^2)
+cat("Mean Squared Error (MSE):", mse, "\n")
+
+```
+
+# Polynomial Regression Setup
+
+
+```{r}
+# Add Polynomial Terms for Key Predictors
+dataset$pace2 <- dataset$pace^2
+dataset$shooting2 <- dataset$shooting^2
+dataset$passing2 <- dataset$passing^2
+dataset$dribbling2 <- dataset$dribbling^2
+dataset$defending2 <- dataset$defending^2
+dataset$physic2 <- dataset$physic^2
+
+# Polynomial Regression Model
+model_poly <- lm(overall ~ pace + pace2 + shooting + shooting2 + passing + passing2 + 
+                 dribbling + dribbling2 + defending + defending2 + physic + physic2 + 
+                 weak_foot + skill_moves + age + value_eur + wage_eur, data = dataset)
+
+# Display Summary for Polynomial Regression Model
+summary(model_poly)
+
+
+
+```
+
+
+
+
+```{r}
+# Calculate MSE for Polynomial Regression Model
+predictions_poly <- predict(model_poly, newdata = dataset)
+mse_poly <- mean((dataset$overall - predictions_poly)^2)
+cat("Mean Squared Error (MSE) for Polynomial Regression:", mse_poly, "\n")
+```
+
+
+# External validation
+
+
+```{r}
+# Split dataset into training and testing sets
+set.seed(123)  # For reproducibility
+train_index <- sample(seq_len(nrow(dataset)), size = 0.8 * nrow(dataset))
+train_data <- dataset[train_index, ]
+test_data <- dataset[-train_index, ]
+
+# Train Polynomial Regression model on the training data
+model_poly_train <- lm(overall ~ pace + I(pace^2) + shooting + I(shooting^2) + 
+                         passing + I(passing^2) + dribbling + I(dribbling^2) + 
+                         defending + I(defending^2) + physic + I(physic^2) + 
+                         weak_foot + skill_moves + age + value_eur + wage_eur, 
+                         data = train_data)
+
+# Predict on the test set
+predictions_test <- predict(model_poly_train, newdata = test_data)
+
+# Calculate MSE and R-squared on the test set
+mse_test <- mean((test_data$overall - predictions_test)^2)
+r_squared_test <- 1 - (sum((test_data$overall - predictions_test)^2) / sum((test_data$overall - mean(test_data$overall))^2))
+cat("External Validation - Test MSE:", mse_test, "\n")
+cat("External Validation - Test R-squared:", r_squared_test, "\n")
+
+```
+
+
+
+# Residual Analysis
+
+```{r}
+# Residuals vs Fitted
+par(mfrow = c(1, 1))
+plot(model_poly_train, which = 1)
+
+# Normal Q-Q plot
+plot(model_poly_train, which = 2)
+
+# Scale-Location plot
+plot(model_poly_train, which = 3)
+
+# Residuals vs Leverage plot
+plot(model_poly_train, which = 5)
+
+```
+
+# Multicollinearity Analysis
+
+```{r}
+# Center key predictors
+dataset <- dataset %>%
+  mutate(
+    pace = scale(pace, center = TRUE, scale = FALSE),
+    shooting = scale(shooting, center = TRUE, scale = FALSE),
+    passing = scale(passing, center = TRUE, scale = FALSE),
+    dribbling = scale(dribbling, center = TRUE, scale = FALSE),
+    defending = scale(defending, center = TRUE, scale = FALSE),
+    physic = scale(physic, center = TRUE, scale = FALSE)
+  )
+
+# Recalculate polynomial terms
+dataset <- dataset %>%
+  mutate(
+    pace2 = pace^2,
+    shooting2 = shooting^2,
+    passing2 = passing^2,
+    dribbling2 = dribbling^2,
+    defending2 = defending^2,
+    physic2 = physic^2
+  )
+
+# Fit polynomial regression model with centered terms
+model_poly_centered <- lm(overall ~ pace + pace2 + shooting + shooting2 + passing + passing2 + 
+                            dribbling + dribbling2 + defending + defending2 + physic + physic2 + 
+                            weak_foot + skill_moves + age + value_eur + wage_eur, data = dataset)
+
+# Calculate VIFs again
+vif_poly_centered <- vif(model_poly_centered)
+print(vif_poly_centered)
+
+```
+
+
+
+

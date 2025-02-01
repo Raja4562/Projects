@@ -1,0 +1,219 @@
+---
+title: "Project"
+author: "Raja Prabakaran"
+date: "2024-11-06"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+
+```{r setup, message=FALSE, warning=FALSE}
+# Load necessary libraries
+library(tidyverse)
+library(caret)
+library(car)
+library(glmnet)
+library(ggplot2)
+library(corrplot)
+library(readxl)
+
+
+```
+
+
+```{r}
+# Load dataset (adjust file path as necessary)
+dataset <- read_excel("Dataset.xlsx")
+glimpse(dataset)  # Check the structure of the dataset
+summary(dataset)  # Summary statistics
+```
+
+## Data Preprocessing
+
+```{r}
+# Select relevant columns for analysis
+selected_features <- dataset %>%
+    dplyr::select(overall, pace, shooting, passing, dribbling, defending, physic,
+                  attacking_finishing, skill_moves, skill_dribbling, movement_acceleration, 
+                  power_shot_power, mentality_aggression, mentality_vision, 
+                  defending_marking_awareness, age, height_cm, weight_kg)
+
+# Check for missing values in selected features
+colSums(is.na(selected_features))
+
+# Handle missing values by removing rows with any missing values
+selected_features <- selected_features %>% drop_na()
+
+```
+
+## Exploratory Data Analysis (EDA)
+
+
+```{r}
+# Correlation Matrix for selected features
+cor_matrix <- cor(selected_features %>% dplyr::select(-overall), use = "complete.obs")
+corrplot::corrplot(cor_matrix, method = "circle")
+
+# Scatter plot matrix for key features against the target variable (overall rating)
+pairs(selected_features %>% dplyr::select(overall, pace, dribbling, defending, passing, shooting, skill_moves, movement_acceleration))
+
+```
+
+
+# Model Building
+
+
+## Multiple Linear Regression
+
+
+```{r}
+# Multiple Linear Regression Model with a broader set of attributes
+model_lm <- lm(overall ~ pace + shooting + passing + dribbling + defending + physic +
+               attacking_finishing + skill_moves + skill_dribbling + movement_acceleration +
+               power_shot_power + mentality_aggression + mentality_vision + 
+               defending_marking_awareness + age + height_cm + weight_kg, data = selected_features)
+summary(model_lm)
+
+# Check for multicollinearity using VIF
+vif_values <- car::vif(model_lm)
+vif_values
+
+```
+
+## Interaction and Second-Order Terms
+
+```{r}
+# Adding interaction and quadratic terms for highly correlated features
+model_interaction <- lm(overall ~ pace * dribbling + shooting * passing + 
+                        I(pace^2) + I(dribbling^2) + I(shooting^2) + I(passing^2) + 
+                        defending + physic + attacking_finishing + skill_moves + 
+                        skill_dribbling + movement_acceleration + power_shot_power +
+                        mentality_aggression + mentality_vision + age + height_cm + weight_kg, 
+                        data = selected_features)
+summary(model_interaction)
+
+```
+
+
+## Regularized Regression (Ridge and Lasso)
+
+```{r}
+# Convert data to matrix format for glmnet
+# Ensure that the 'overall' column is included in 'selected_features'
+x <- model.matrix(overall ~ ., data = selected_features)
+y <- selected_features$overall
+
+# Lasso Regression
+lasso_model <- glmnet(x, y, alpha = 1)  # Fit the Lasso model
+cv_lasso <- cv.glmnet(x, y, alpha = 1)  # Perform cross-validation for Lasso
+plot(cv_lasso)  # Plot cross-validation results for Lasso
+
+# Extract the optimal lambda for Lasso
+lasso_best_lambda <- cv_lasso$lambda.min
+cat("Optimal lambda for Lasso:", lasso_best_lambda, "\n")
+
+# Coefficients for Lasso at the best lambda
+lasso_coef <- predict(lasso_model, s = lasso_best_lambda, type = "coefficients")
+print("Coefficients for Lasso Regression:")
+print(lasso_coef)
+
+# Ridge Regression
+ridge_model <- glmnet(x, y, alpha = 0)  # Fit the Ridge model
+cv_ridge <- cv.glmnet(x, y, alpha = 0)  # Perform cross-validation for Ridge
+plot(cv_ridge)  # Plot cross-validation results for Ridge
+
+# Extract the optimal lambda for Ridge
+ridge_best_lambda <- cv_ridge$lambda.min
+cat("Optimal lambda for Ridge:", ridge_best_lambda, "\n")
+
+# Coefficients for Ridge at the best lambda
+ridge_coef <- predict(ridge_model, s = ridge_best_lambda, type = "coefficients")
+print("Coefficients for Ridge Regression:")
+print(ridge_coef)
+
+```
+
+
+## Model Evaluation
+
+
+
+```{r}
+# Cross-validation for Multiple Linear Regression
+set.seed(123)
+train_control <- trainControl(method = "cv", number = 10)
+model_cv_lm <- train(overall ~ pace + shooting + passing + dribbling + defending + physic +
+                     attacking_finishing + skill_moves + skill_dribbling + movement_acceleration +
+                     power_shot_power + mentality_aggression + mentality_vision + 
+                     defending_marking_awareness + age + height_cm + weight_kg, 
+                     data = selected_features, method = "lm", trControl = train_control)
+print(model_cv_lm)
+
+# Cross-validation for Interaction Model
+model_cv_interaction <- train(overall ~ pace * dribbling + shooting * passing + 
+                              I(pace^2) + I(dribbling^2) + I(shooting^2) + I(passing^2) + 
+                              defending + physic + attacking_finishing + skill_moves + 
+                              skill_dribbling + movement_acceleration + power_shot_power +
+                              mentality_aggression + mentality_vision + age + height_cm + weight_kg, 
+                              data = selected_features, method = "lm", trControl = train_control)
+print(model_cv_interaction)
+
+# Cross-validation error for Lasso
+lasso_best_lambda_cv <- cv_lasso$lambda.min
+lasso_mse <- cv_lasso$cvm[cv_lasso$lambda == lasso_best_lambda_cv]
+cat("Lasso Cross-Validation MSE:", lasso_mse, "\n")
+
+# Cross-validation error for Ridge
+ridge_best_lambda_cv <- cv_ridge$lambda.min
+ridge_mse <- cv_ridge$cvm[cv_ridge$lambda == ridge_best_lambda_cv]
+cat("Ridge Cross-Validation MSE:", ridge_mse, "\n")
+
+```
+
+
+## Residual Analysis and Diagnostics
+
+
+```{r}
+# Residual diagnostics for Multiple Linear Regression model
+par(mfrow = c(2, 2))  # Set up a 2x2 plotting space
+plot(model_lm)
+
+# Normal Q-Q Plot for residuals of Interaction Model
+qqnorm(model_interaction$residuals)
+qqline(model_interaction$residuals, col = "red", lwd = 2)
+
+# Residual diagnostics for Ridge Regression
+ridge_residuals <- y - predict(ridge_model, s = ridge_best_lambda, newx = x)
+par(mfrow = c(1, 1))
+plot(ridge_residuals, main = "Residual Plot for Ridge Regression", ylab = "Residuals")
+abline(h = 0, col = "red")
+
+# Residual diagnostics for Lasso Regression
+lasso_residuals <- y - predict(lasso_model, s = lasso_best_lambda, newx = x)
+plot(lasso_residuals, main = "Residual Plot for Lasso Regression", ylab = "Residuals")
+abline(h = 0, col = "red")
+
+```
+
+## Feature Importance
+
+```{r}
+# Feature importance plot for Multiple Linear Regression
+broom::tidy(model_lm) %>%
+    arrange(desc(abs(statistic))) %>%
+    ggplot(aes(reorder(term, abs(statistic)), abs(statistic))) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    labs(x = "Features", y = "Importance (absolute t-value)", title = "Feature Importance")
+
+```
+
+
+
